@@ -3,6 +3,7 @@ on:
   schedule:
     - cron: 0 0 7 7 *
   workflow_dispatch:
+
 jobs:
   renew-vps:
     runs-on: ubuntu-latest
@@ -12,16 +13,19 @@ jobs:
         with:
           token: ${{ secrets.PAT_WITH_WORKFLOW_SCOPE }}
           fetch-depth: 0
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
       - name: Cache Virtual Environment
         id: cache-venv
         uses: actions/cache@v5
         with:
           path: venv
           key: ${{ runner.os }}-venv-${{ hashFiles('requirements.txt') }}
+
       - name: Create venv and Install dependencies
         if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
@@ -29,6 +33,7 @@ jobs:
           source venv/bin/activate
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
       - name: Run renewal script with retry
         id: renewal
         env:
@@ -47,19 +52,18 @@ jobs:
           source venv/bin/activate
 
           MAX_RETRIES=3
-          RETRY_DELAY=1800  # 30分钟 (秒)
+          RETRY_DELAY=1800
 
           for i in $(seq 1 $MAX_RETRIES); do
             echo "========================================="
             echo "🔄 尝试 $i/$MAX_RETRIES - $(date)"
             echo "========================================="
             
-            set +e  # 允许非零退出码
+            set +e
             python Euserv_Renewal.py
             EXIT_CODE=$?
             set -e
             
-            # 退出码处理
             case $EXIT_CODE in
               0)
                 echo "✅ 续约成功或无需续约"
@@ -67,7 +71,6 @@ jobs:
                 ;;
               2)
                 echo "⏭️ 未到续约日期，跳过执行 (动态调度将更新 cron)"
-                # 正常退出，让后续步骤执行动态调度更新
                 exit 0
                 ;;
               *)
@@ -82,6 +85,7 @@ jobs:
 
           echo "💥 所有 $MAX_RETRIES 次重试均失败"
           exit 1
+
       - name: Update schedule for next renewal
         if: steps.renewal.outputs.next_cron != ''
         env:
@@ -89,10 +93,14 @@ jobs:
           NEXT_CRON: ${{ steps.renewal.outputs.next_cron }}
           NEXT_DATE: ${{ steps.renewal.outputs.next_date }}
         run: |
-          # === 第一步：先拉取远程最新（此时工作区干净） ===
-          git pull --rebase origin main
-      
-          # === 第二步：再修改 cron 文件 ===
+          # ===== 调试：确认开始 =====
+          echo "🚀 开始更新 cron，先同步远程..."
+          
+          # 1. 拉取远程最新（先 fetch 再 rebase，更可靠）
+          git fetch origin main
+          git rebase origin/main
+
+          # 2. 修改 cron 文件
           python3 -c "
           import re, sys
           path = '.github/workflows/renewal.yml'
@@ -107,15 +115,16 @@ jobs:
               f.write(updated)
           print(f'✅ Cron 已更新为: {new_cron}')
           "
-      
-          # === 第三步：提交并推送 ===
+
+          # 3. 提交并推送（带 --force-with-lease，确保最终成功）
           if ! git diff --quiet .github/workflows/renewal.yml; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add .github/workflows/renewal.yml
             git commit -m "ci(renewal): 更新下次续约时间为 $NEXT_DATE"
-            git push origin HEAD:main
+            git push --force-with-lease origin HEAD:main
           fi
+
       - name: Upload failed captcha for debugging
         if: failure()
         uses: actions/upload-artifact@v7
