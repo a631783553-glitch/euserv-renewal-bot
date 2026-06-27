@@ -1,7 +1,7 @@
 name: Euserv VPS Renewal
 on:
   schedule:
-    - cron: 0 0 22 7 *
+    - cron: 0 0 7 7 *
   workflow_dispatch:
 jobs:
   renew-vps:
@@ -89,6 +89,10 @@ jobs:
           NEXT_CRON: ${{ steps.renewal.outputs.next_cron }}
           NEXT_DATE: ${{ steps.renewal.outputs.next_date }}
         run: |
+          # === 第一步：先拉取远程最新（此时工作区干净） ===
+          git pull --rebase origin main
+      
+          # === 第二步：再修改 cron 文件 ===
           python3 -c "
           import re, sys
           path = '.github/workflows/renewal.yml'
@@ -103,10 +107,11 @@ jobs:
               f.write(updated)
           print(f'✅ Cron 已更新为: {new_cron}')
           "
+      
+          # === 第三步：提交并推送 ===
           if ! git diff --quiet .github/workflows/renewal.yml; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git pull --rebase origin main
             git add .github/workflows/renewal.yml
             git commit -m "ci(renewal): 更新下次续约时间为 $NEXT_DATE"
             git push origin HEAD:main
